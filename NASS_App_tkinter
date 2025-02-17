@@ -1,0 +1,436 @@
+import tkinter as tk
+import requests
+import pandas as pd
+import threading
+from tkinter import messagebox
+import numpy as np
+
+
+# Define your API key and base URL
+api_key = '' #Insert your API key here
+base_url = 'https://quickstats.nass.usda.gov/api/api_GET/'
+
+# Dictionary to map region numbers to their names
+region_names = {}  # Define the region_names dictionary here
+
+selected_crop = ""  # Store the selected crop
+selected_parameters = []  # Store the selected parameters as a list
+# Define a dictionary to map states to regions
+state_to_region = {}
+# Define regions_states_df as a global variable
+regions_states_df = None
+
+# Function to fetch and display the list of crops
+def fetch_crops():
+    # Define query parameters to fetch available commodity_desc values
+    params = {
+        'key': api_key,
+        'source_desc': 'SURVEY',
+        'reference_period_desc': 'YEAR',
+        'year': ['2021'],
+        'agg_level_desc': 'NATIONAL',
+        'format': 'JSON'
+    }
+    
+    # Send the request to get available commodity_desc values
+    response = requests.get(base_url, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        commodity_desc_values_all = sorted(set(record['commodity_desc'] for record in data['data']))
+        crop_listbox.delete(0, tk.END)  # Clear the listbox
+        for idx, commodity_desc in enumerate(commodity_desc_values_all, start=1):
+            crop_listbox.insert(tk.END, commodity_desc)
+
+# Function to fetch and display the list of parameters (short_desc values)
+def fetch_parameters():
+    global selected_crop  # Access the global variable
+    selected_crop = crop_listbox.get(crop_listbox.curselection())
+    
+    # Define query parameters to fetch available short_desc values for the selected crop
+    params = {
+        'key': api_key,
+        'source_desc': 'SURVEY',
+        'commodity_desc': selected_crop,
+        'reference_period_desc': 'YEAR',
+        'year': ['2021'],
+        'agg_level_desc': 'STATE',
+        'format': 'JSON'
+    }
+    
+    # Send the request to get available short_desc values
+    response = requests.get(base_url, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        short_desc_values_all = sorted(set(record['short_desc'] for record in data['data']))
+        parameter_listbox.delete(0, tk.END)  # Clear the listbox
+        for idx, short_desc in enumerate(short_desc_values_all, start=1):
+            parameter_listbox.insert(tk.END, short_desc)
+
+# Function to handle the selection of a crop
+def select_crop():
+    global selected_parameters  # Access the global variable
+    selected_index = crop_listbox.curselection()
+    if selected_index:
+        selected_crop = crop_listbox.get(selected_index[0])
+        greeting_label.config(text="You selected: " + selected_crop)
+        fetch_parameters()  # Fetch and display the parameters (short_desc values)
+        selected_parameters = []  # Clear the selected parameters when a new crop is chosen
+
+# Function to handle the selection of parameters
+def select_parameters():
+    global selected_parameters  # Access the global variable
+    selected_indices = parameter_listbox.curselection()
+    selected_parameters = [parameter_listbox.get(i) for i in selected_indices]
+    selected_parameters_text = ", ".join(selected_parameters)
+
+    # Split the selected parameters into multiple rows
+    selected_parameters_lines = selected_parameters_text.split(", ")
+    selected_parameters_text = "\n".join(selected_parameters_lines)
+
+    greeting_label.config(text="You selected: " + selected_crop + " - \n" + selected_parameters_text)
+    
+# Function to fetch and store data
+def fetch_and_store_data():
+    global selected_crop, selected_parameters, df
+
+    if selected_crop and selected_parameters:
+        # Show loading message and disable buttons
+        loading_label.pack()
+        fetch_data_button.config(state="disabled")
+        select_parameters_button.config(state="disabled")
+
+        # Create a new thread to fetch and process the data
+        fetch_thread = threading.Thread(target=fetch_and_process_data)
+        fetch_thread.start()
+
+# Function to fetch and process data (executed in a separate thread)
+def fetch_and_process_data():
+    global df
+    
+    # Construct the 'short_desc' parameter as a list of selected parameters
+    selected_parameters_list = selected_parameters
+    
+    print("Selected Parameters List:", selected_parameters_list)  # Add this line to print the selected parameters
+
+    # Define query parameters as before
+    params = {
+        'key': api_key,
+        'source_desc': 'SURVEY',
+        'short_desc': selected_parameters_list,
+        'commodity_desc': selected_crop,
+        'reference_period_desc': 'YEAR',
+        'year': ['2017','2018','2019','2020','2021'],
+        'agg_level_desc': ['NATIONAL', 'STATE'],
+        'format': 'JSON'
+    }
+
+    # Create a dictionary to hold the parameters
+    data = {
+        'short_desc': selected_parameters
+    }
+
+    try:
+        response = requests.post(base_url, params=params, json=data)
+
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data:
+                # Convert the data to a pandas DataFrame
+                df = pd.DataFrame(data['data'])
+
+                # Keep only the desired columns
+                columns_to_keep = ['state_name', 'short_desc', 'commodity_desc', 'year', 'Value', 'agg_level_desc']
+                df = df[columns_to_keep]
+
+                # Debugging information
+                print("Data fetched and processed successfully.")
+                print("Number of rows in DataFrame:", len(df))
+                print("Unique values in 'agg_level_desc' column:", df['agg_level_desc'].unique())
+
+                # Process the data as needed
+
+                # Show unique states to the user
+                show_unique_states(df)
+            else:
+                print("No data in the response.")
+        else:
+            print("Request failed with status code:", response.status_code)
+            print("Error message from the API:", response.text)
+
+    except requests.exceptions.RequestException as e:
+        print("Request failed with an exception:", str(e))
+        # Display an error message to the user
+        messagebox.showerror("Request Error", "Failed to retrieve data from the API. Please check your network connection.")
+
+    except Exception as e:
+        print("An unexpected error occurred:", str(e))
+        # Display an error message to the user
+        messagebox.showerror("Error", "An unexpected error occurred during data retrieval and processing.")
+
+    # Hide loading label and re-enable buttons
+    loading_label.pack_forget()
+    fetch_data_button.config(state="normal")
+    select_parameters_button.config(state="normal")
+
+
+
+# Dictionary to map region numbers to their names
+region_names = {}
+
+# Function to show unique states and allow region assignment to the user
+def show_unique_states(dataframe):
+    unique_states = dataframe[dataframe['agg_level_desc'] == 'STATE']['state_name'].unique()
+    states_text = "\n".join(unique_states)
+
+    # Create a new tkinter window for region assignment
+    region_assignment_window = tk.Toplevel(app)
+    region_assignment_window.title("Unique States and Region Assignment")
+
+    # Label for displaying unique states
+    states_label = tk.Label(region_assignment_window, text="Unique States:\n" + states_text)
+    states_label.grid(row=0, column=0)
+
+    # Create a frame to hold the assignment section
+    assignment_frame = tk.Frame(region_assignment_window)
+    assignment_frame.grid(row=1, column=0)
+
+    # Create a Canvas widget to enable scrolling
+    canvas = tk.Canvas(assignment_frame)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    # Create a scrollbar for the canvas
+    scrollbar = tk.Scrollbar(assignment_frame, orient=tk.VERTICAL, command=canvas.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    canvas.config(yscrollcommand=scrollbar.set)
+
+    # Create a frame inside the canvas to hold the assignment content
+    assignment_content = tk.Frame(canvas)
+    canvas.create_window((0, 0), window=assignment_content, anchor=tk.NW)
+
+    # Create drop-down menus for region assignment
+    region_assignment = {}
+    
+    for i, state in enumerate(unique_states):
+        label = tk.Label(assignment_content, text=f"Assign region for {state}:")
+        label.grid(row=i, column=0)
+        region_assignment[state] = tk.StringVar()
+        region_assignment[state].set("1")  # Default value is set to 1
+        region_menu = tk.OptionMenu(assignment_content, region_assignment[state], *range(1, 11))
+        region_menu.grid(row=i, column=1)
+
+    # Button to confirm and store the assignments and names
+    confirm_button = tk.Button(region_assignment_window, text="Confirm", command=lambda: assign_region_names(region_assignment))
+    confirm_button.grid(row=2 + len(unique_states), column=0, columnspan=2)
+
+    # Configure the canvas for scrolling
+    canvas.config(scrollregion=canvas.bbox(tk.ALL))
+
+    # Bind the canvas to the mousewheel for scrolling
+    canvas.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
+
+
+
+
+# Function to assign region names
+def assign_region_names(region_assignment):
+    global region_names  # Access the global variable
+    # Prompt the user to enter names for each region
+    name_assignment_window = tk.Toplevel(app)
+    name_assignment_window.title("Region Name Assignment")
+    
+    for region_num in range(1, 11):
+        label = tk.Label(name_assignment_window, text=f"Enter name for Region {region_num}:")
+        label.grid(row=region_num - 1, column=0)
+        
+        # Assign variable names to the StringVar instances
+        region_names[region_num] = tk.StringVar()
+        region_names[region_num].set("Other")
+        
+        entry = tk.Entry(name_assignment_window, textvariable=region_names[region_num])
+        entry.grid(row=region_num - 1, column=1)
+    
+    # Button to confirm and print region assignments
+    confirm_button = tk.Button(name_assignment_window, text="Confirm", command=lambda: confirm_and_print_regions(region_assignment))
+    confirm_button.grid(row=10, column=0, columnspan=2)
+
+def confirm_and_print_regions(region_assignment):
+    global regions_states_df  # Access the global variable
+
+    assigned_regions = {}  # Create a dictionary to store state-to-region assignments
+
+    for state, region_var in region_assignment.items():
+        region = region_var.get()
+        if region.isnumeric():
+            assigned_regions[state] = int(region)
+
+    # Create a mapping of region names based on region numbers
+    region_names_mapping = {int(key): val.get() for key, val in region_names.items()}
+
+    # Assign the region names to the assigned regions, defaulting to "Other" if not assigned
+    for state, region_num in assigned_regions.items():
+        assigned_regions[state] = region_names_mapping.get(region_num, "Other")
+
+    # Create a DataFrame with regions and their corresponding states
+    regions_states_df = pd.DataFrame({'Region': list(set(assigned_regions.values()))})
+    regions_states_df['States'] = regions_states_df['Region'].apply(lambda region: [state for state, assigned_region in assigned_regions.items() if assigned_region == region])
+
+    # Print the state-to-region assignments
+    for state, region in assigned_regions.items():
+        print(f"Assigned Region for {state}: {region}")
+
+
+    # Add the "region" column to the DataFrame using the assigned region names
+    if 'state_name' in df:
+        df['region'] = df['state_name'].map(assigned_regions)
+
+    # Assign 'NATIONAL' directly for 'NATIONAL' level observations
+    df.loc[df['agg_level_desc'] == 'NATIONAL', 'region'] = 'US TOTAL'
+
+    # Print the state-to-region assignments and the updated DataFrame
+    for state, region in assigned_regions.items():
+        print(f"Assigned Region for {state}: {region}")
+
+    # Print the DataFrame with regions and states
+    print("DataFrame with Regions and States:")
+    print(regions_states_df)
+    regions_states_df.to_csv(f"test1.csv", index=True)
+    df.to_csv(f"test2.csv", index=True)
+
+    print(df)  # Print the updated DataFrame
+    print(df.head(50))  # Print the updated DataFrame
+
+
+
+# Function to process data
+def process_data(agg_level):
+    global df
+
+    if df is not None:
+        # Create a copy of the original DataFrame
+        processed_df = df.copy()
+
+        # Convert the 'Value' column to integers in the copied DataFrame
+        processed_df['Contains_D'] = processed_df['Value'].str.contains(r'\(D\)')  # Create a new column to track (D) values
+        processed_df['Value'] = processed_df['Value'].str.replace(',', '', regex=True)  # Remove commas
+        processed_df['Value'] = processed_df['Value'].str.replace(r'[^\d]', '', regex=True)  # Remove non-numeric characters
+        processed_df['Value'] = pd.to_numeric(processed_df['Value'], errors='coerce', downcast='integer')  # Convert to integers, fill empty strings with NaN
+
+        # Calculate the sum of 'Value'
+        sum_value_df = processed_df.pivot_table(index=agg_level, columns='short_desc', values='Value', aggfunc='sum', fill_value=0)
+
+        # Calculate the count of each 'state_name'-'short_desc' combination
+        count_df = processed_df.pivot_table(index=agg_level, columns='short_desc', values='Value', aggfunc='count', fill_value=0)
+
+        # Calculate the count of 'Contains_D = True' for each 'agg_level' and 'short_desc'
+        contains_d_count = processed_df.pivot_table(index=agg_level, columns='short_desc', values='Contains_D', aggfunc='sum', fill_value=0)
+
+        # Calculate the "{agg_level} TOTAL" row for sum, count, and contains_d_count
+        total_value = sum_value_df[sum_value_df.index != 'US TOTAL'].sum()
+        total_count = count_df[count_df.index != 'US TOTAL'].sum()
+        total_contains_d_count = contains_d_count[contains_d_count.index != 'US TOTAL'].sum()
+
+        # Create DataFrames for "{agg_level} TOTAL" rows
+        total_value_df = pd.DataFrame(total_value).T
+        total_value_df.index = [f"{agg_level} TOTAL"]
+        total_count_df = pd.DataFrame(total_count).T
+        total_count_df.index = [f"{agg_level} TOTAL"]
+        total_contains_d_count_df = pd.DataFrame(total_contains_d_count).T
+        total_contains_d_count_df.index = [f"{agg_level} TOTAL"]
+
+        # Calculate the "US TOTAL" row for sum, count, and contains_d_count
+        us_total_value = sum_value_df.loc['US TOTAL']
+        us_total_count = count_df.loc['US TOTAL']
+        us_total_contains_d_count = contains_d_count.loc['US TOTAL']
+
+        # Drop the original "US TOTAL" row from the result DataFrames
+        sum_value_df = sum_value_df.drop('US TOTAL')
+        count_df = count_df.drop('US TOTAL')
+        contains_d_count = contains_d_count.drop('US TOTAL')
+
+        # Append the "{agg_level} TOTAL" and the new "US TOTAL" rows to the sum, count, and contains_d_count DataFrames
+        sum_value_df = sum_value_df.append(total_value_df)
+        count_df = count_df.append(total_count_df)
+        contains_d_count = contains_d_count.append(total_contains_d_count_df)
+        sum_value_df = sum_value_df.append(us_total_value)
+        count_df = count_df.append(us_total_count)
+        contains_d_count = contains_d_count.append(us_total_contains_d_count)
+
+        # Combine sum, count, and contains_d_count DataFrames side by side
+        result_df = pd.concat([sum_value_df, count_df, contains_d_count], axis=1, keys=["Sum", "Count", "Contains_D_Count"])
+        result_df = result_df.sort_index(axis=1, level=[0, 1], ascending=[False, False])
+        result_df.columns = pd.MultiIndex.from_tuples([(col[0], f"{col[0]} - {col[1]}") for col in result_df.columns])
+        result_df = result_df.droplevel(0, axis=1)
+        
+        # Reset the index, which will move the regions to a regular column
+        result_df.reset_index(inplace=True)
+        
+        # Get the name of the first column
+        first_col_name = result_df.columns[0]
+        
+        # Rename the first column based on the agg_level
+        first_col_name = "State" if agg_level == "state_name" else "Region"
+        result_df.rename(columns={result_df.columns[0]: first_col_name}, inplace=True)
+        
+        # Check if agg_level is 'region' and merge with regions_states_df
+        if agg_level == 'region':
+            result_df = pd.merge(result_df, regions_states_df, left_on='Region', right_on='Region', how='left')
+
+        
+       # Display the resulting DataFrame
+        print(result_df)
+
+        # You can also export the processed DataFrame to a CSV file if needed
+        result_df.to_csv(f"{agg_level}_processed_data.csv", index=True)
+
+        #TO DO
+        #Divide the state totals by five?
+
+        
+# Create the main application window
+app = tk.Tk()
+app.title("Crop Selection App")
+
+# Create a loading label but hide it initially
+loading_message = "Fetching and processing data..."
+loading_label = tk.Label(app, text=loading_message)
+
+# Create a button to fetch the list of crops
+fetch_button = tk.Button(app, text="Fetch Crops", command=fetch_crops)
+fetch_button.pack()
+
+# Create a listbox to display the available crops
+crop_listbox = tk.Listbox(app, width=50)
+crop_listbox.pack()
+
+# Create a button to select a crop
+select_button = tk.Button(app, text="Select Crop", command=select_crop)
+select_button.pack()
+
+# Create a listbox to display the available parameters (short_desc values)
+parameter_listbox = tk.Listbox(app, selectmode=tk.MULTIPLE, width=50)  # Set selectmode to MULTIPLE
+parameter_listbox.pack()
+
+# Create a button to select parameters
+select_parameters_button = tk.Button(app, text="Select Parameters", command=select_parameters)
+select_parameters_button.pack()
+
+# Create a button to fetch and store data
+fetch_data_button = tk.Button(app, text="Fetch and Store Data", command=fetch_and_store_data)
+fetch_data_button.pack()
+
+# Create a button to process the data by region
+process_data_by_region_button = tk.Button(app, text="Process Data by Region", command=lambda: process_data('region'))
+process_data_by_region_button.pack()
+
+# Create a button to process the data by state_level
+process_data_by_state_button = tk.Button(app, text="Process Data by State Level", command=lambda: process_data('state_name'))
+process_data_by_state_button.pack()
+
+# Create a label for the selected crop and parameters
+greeting_label = tk.Label(app, text="")
+greeting_label.pack()
+
+# Start the application's main loop
+app.mainloop()
